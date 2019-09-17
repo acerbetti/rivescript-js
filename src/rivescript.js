@@ -32,7 +32,6 @@ const sorting = require("./sorting");
 const inherit_utils = require("./inheritance");
 const { MemorySessionManager } = require("./sessions");
 const JSObjectHandler = require("./lang/javascript");
-const readDir = require("fs-readdir-recursive");
 
 /**
 RiveScript (hash options)
@@ -215,9 +214,6 @@ const RiveScript = (function() {
 					}
 				}
 			}
-			// Identify our runtime environment. Web, or node?
-			self._node    = {}; // NodeJS objects
-			self._runtime = self.runtime();
 
 			// Sub-module helpers.
 			self.parser = new Parser(self);
@@ -273,7 +269,6 @@ const RiveScript = (function() {
 			// Set the default JavaScript language handler.
 			self._handlers.javascript = new JSObjectHandler(self);
 			self.say(`RiveScript Interpreter v${VERSION} Initialized.`);
-			self.say(`Runtime Environment: ${self._runtime}`);
 		}
 
 		/**
@@ -283,26 +278,6 @@ const RiveScript = (function() {
 		*/
 		version() {
 			return VERSION;
-		}
-
-		/**
-		private void runtime ()
-
-		Detect the runtime environment of this module, to determine if we're
-		running in a web browser or from node.
-		*/
-		runtime() {
-			var self = this;
-
-			// Webpack and browserify define `process.browser` so this is the best place
-			// to check if we're running in a web environment.
-			if (process.browser) {
-				return "web";
-			}
-
-			// Import the Node filesystem library.
-			self._node.fs = require("fs");
-			return "node";
 		}
 
 		/**
@@ -357,185 +332,6 @@ const RiveScript = (function() {
 		////////////////////////////////////////////////////////////////////////
 		// Loading and Parsing Methods                                        //
 		////////////////////////////////////////////////////////////////////////
-
-		/**
-		async loadFile(string path || array path)
-
-		Load a RiveScript document from a file. The path can either be a string that
-		contains the path to a single file, or an array of paths to load multiple
-		files. The Promise resolves when all of the files have been parsed and
-		loaded. The Promise rejects on error.
-
-		This loading method is asynchronous so you must resolve the promise or
-		await it before you go on to sort the replies.
-
-		For backwards compatibility, this function can take callbacks instead
-		of returning a Promise:
-
-		> `rs.loadDirectory(path, onSuccess(), onError(err, filename, lineno))`
-
-		* resolves: `()`
-		* rejects: `(string error)`
-		*/
-		async loadFile(path, onSuccess, onError) {
-			var self = this;
-
-			// Did they give us a single path?
-			if (typeof path === "string") {
-				path = [path];
-			}
-
-			let promises = new Array();
-			for (let i = 0, len = path.length; i < len; i++) {
-				let file = path[i];
-				self.say(`Request to load file: ${file}`);
-				promises.push(function(f) {
-					// This function returns a Promise. How are we going to load
-					// the file?
-					if (self._runtime === "web") {
-						// Via ajax!
-						return self._ajaxLoadFile(f);
-					} else {
-						// With node fs module!
-						return self._nodeLoadFile(f);
-					}
-				}(file));
-			}
-
-			// The final Promise to return.
-			let promise = new Promise((resolve, reject) => {
-				Promise.all(promises).then(resolve).catch(reject);
-			});
-
-			// Legacy callback style?
-			if (typeof(onSuccess) === "function") {
-				self.warn("DEPRECATED: RiveScript.loadFile() now returns a Promise instead of using callbacks")
-				return promise.then(onSuccess).catch(function(err, filename, lineno) {
-					if (typeof(onError) === "function") {
-						onError.call(null, err, filename, lineno);
-					}
-				});
-			} else {
-				return promise;
-			}
-		}
-
-		// Load a file using ajax. DO NOT CALL THIS DIRECTLY.
-		// Returns a Promise.
-		async _ajaxLoadFile(file) {
-			var self = this;
-			return new Promise(function(resolve, reject) {
-				let xhr = new XMLHttpRequest();
-				xhr.open("GET", file, true);
-				xhr.onreadystatechange = () => {
-					var ref;
-					if (xhr.readyState === 4) {
-						let ref = xhr.status;
-						if (ref === 200) {
-							self.say(`Loading file ${file} complete.`);
-
-							// Parse it!
-							let ok = self.parse(file, xhr.responseText, (err) => {
-								reject(err);
-							});
-							if (ok) {
-								resolve();
-							} else {
-								reject("parser error");
-							}
-						} else {
-							self.warn(`Network error in XMLHttpRequest for file ${file}`);
-							reject(`Failed to load file ${file}: network error`);
-						}
-					}
-				};
-				xhr.send(null);
-			});
-		}
-
-		// Load a file using node. DO NOT CALL THIS DIRECTLY.
-		// Returns a Promise.
-		async _nodeLoadFile(file) {
-			var self = this;
-			return new Promise(function(resolve, reject) {
-				// Load the file.
-				return self._node.fs.readFile(file, (err, data) => {
-					if (err) {
-						reject(err);
-						return;
-					}
-
-					// Parse it!
-					let ok = self.parse(file, "" + data, (err) => {
-						reject(err);
-					});
-					if (ok) {
-						resolve();
-					} else {
-						reject("parser error");
-					}
-				});
-			});
-		}
-
-		/**
-		async loadDirectory (string path)
-
-		Load RiveScript documents from a directory recursively.
-
-		For backwards compatibility, this function can take callbacks instead
-		of returning a Promise:
-
-		> `rs.loadDirectory(path, onSuccess(), onError(err, filename, lineno))`
-
-		This function is not supported in a web environment.
-		*/
-		async loadDirectory(path, onSuccess, onError) {
-			var self = this;
-			var promise = new Promise(function(resolve, reject) {
-				// Can't be done on the web!
-				if (self._runtime === "web") {
-					reject("loadDirectory can't be used on the web!");
-					return;
-				}
-
-				// Verify the directory exists.
-				self._node.fs.stat(path, (err, stats) => {
-					if (err) {
-						reject(err);
-						return;
-					}
-					if (!stats.isDirectory()) {
-						reject(`${path} is not a directory`);
-						return;
-					}
-					self.say(`Loading from directory ${path}`);
-
-					// Load all the files.
-					let files = readDir(path);
-					let toLoad = new Array();
-					for (let i = 0, len = files.length; i < len; i++) {
-						let file = files[i];
-						if (file.match(/\.(rive|rs)$/i)) {
-							// Keep track of the file's status.
-							toLoad.push(path + "/" + file);
-						}
-					}
-					self.loadFile(toLoad).then(resolve).catch(reject);
-				});
-			});
-
-			// Legacy callback-style?
-			if (typeof(onSuccess) === "function") {
-				self.warn("DEPRECATED: RiveScript.loadDirectory() now returns a Promise instead of using callbacks")
-				return promise.then(onSuccess).catch(function(err, filename, lineno) {
-					if (typeof(onError) === "function") {
-						onError.call(null, err, filename, lineno);
-					}
-				});
-			}
-			return promise;
-		}
 
 		/**
 		bool stream (string code[, func onError])
@@ -783,33 +579,6 @@ const RiveScript = (function() {
 		stringify(deparsed) {
 			var self = this;
 			return self.parser.stringify(deparsed);
-		}
-
-		/**
-		void write (string filename[, data deparsed])
-
-		Write the in-memory RiveScript data into a RiveScript text file. This
-		method can not be used on the web; it requires filesystem access and can
-		only run from a Node environment.
-
-		This calls the `stringify()` method and writes the output into the filename
-		specified. You can provide your own deparse-compatible data structure,
-		or else the current state of the bot's brain is used instead.
-		*/
-		write(filename, deparsed) {
-			var self = this;
-
-			// Can't be done on the web!
-			if (self._runtime === "web") {
-				self.warn("write() can't be used on the web!");
-				return;
-			}
-
-			return self._node.fs.writeFile(filename, self.stringify(deparsed), function(err) {
-				if (err) {
-					return self.warn(`Error writing to file ${filename}: ${err}`);
-				}
-			});
 		}
 
 		////////////////////////////////////////////////////////////////////////
