@@ -69,8 +69,7 @@
   },
   "dependencies": {
     "babel-loader": "^7.1.5",
-    "babel-polyfill": "^6.26.0",
-    "fs-readdir-recursive": "^1.0.0"
+    "babel-polyfill": "^6.26.0"
   },
   "typings": "rivescript.d.ts"
 }
